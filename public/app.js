@@ -41,6 +41,14 @@ function setStatus(message) {
 function renderResumes() {
   resumeList.innerHTML = '';
 
+  if (state.resumes.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'text-sm text-slate-500 dark:text-slate-400';
+    li.textContent = 'No resumes yet. Create one to get started.';
+    resumeList.appendChild(li);
+    return;
+  }
+
   state.resumes.forEach((resume) => {
     const li = document.createElement('li');
     const button = document.createElement('button');
@@ -58,6 +66,14 @@ function renderResumes() {
 
 function renderVersions() {
   versionList.innerHTML = '';
+
+  if (state.versions.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'text-sm text-slate-500 dark:text-slate-400';
+    li.textContent = state.currentResumeId ? 'No versions yet.' : 'Select a resume to view versions.';
+    versionList.appendChild(li);
+    return;
+  }
 
   state.versions.forEach((version) => {
     const li = document.createElement('li');
@@ -77,7 +93,17 @@ function renderVersions() {
 async function refreshResumes() {
   const data = await api('/api/resumes');
   state.resumes = data.resumes;
+
+  if (state.currentResumeId && !state.resumes.some((resume) => resume.id === state.currentResumeId)) {
+    state.currentResumeId = null;
+    state.currentVersionId = null;
+    state.versions = [];
+    titleInput.value = '';
+    contentInput.value = '';
+  }
+
   renderResumes();
+  renderVersions();
 }
 
 async function selectResume(resumeId) {
@@ -136,6 +162,11 @@ async function saveDraft() {
 async function duplicateVersion() {
   if (!state.currentResumeId) {
     setStatus('Select or create a resume first.');
+    return;
+  }
+
+  if (!state.currentVersionId && !contentInput.value.trim()) {
+    setStatus('Add content first, then save or duplicate.');
     return;
   }
 
