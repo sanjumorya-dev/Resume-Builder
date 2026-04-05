@@ -71,6 +71,20 @@ const latestVersionNumberStmt = db.prepare(
   'SELECT COALESCE(MAX(version_number), 0) AS max_version FROM resume_versions WHERE resume_id = ?'
 );
 
+function parseInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : null;
+}
+
+function normalizeResumeInput({ title, content }, fallbackTitle = 'Untitled Resume', fallbackContent = '') {
+  const safeTitle = typeof title === 'string' ? title.trim() : '';
+  const safeContent = typeof content === 'string' ? content : fallbackContent;
+  return {
+    title: safeTitle || fallbackTitle,
+    content: safeContent
+  };
+}
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -81,7 +95,11 @@ app.use((req, res, next) => {
     const nameHeader = req.header('x-user-name') || 'Demo User';
 
     if (userIdHeader) {
-      const existing = findUserByIdStmt.get(Number(userIdHeader));
+      const userId = parseInteger(userIdHeader);
+      if (!userId || userId < 1) {
+        return res.status(400).json({ error: 'Invalid user ID' });
+      }
+      const existing = findUserByIdStmt.get(userId);
       if (!existing) {
         return res.status(401).json({ error: 'Unknown user ID' });
       }
@@ -110,12 +128,12 @@ app.get('/api/resumes', (req, res) => {
 });
 
 app.post('/api/resumes', (req, res) => {
-  const { title = 'Untitled Resume', content = '' } = req.body || {};
+  const { title, content } = normalizeResumeInput(req.body || {});
 
   const tx = db.transaction(() => {
-    const result = createResumeStmt.run(req.user.id, title.trim() || 'Untitled Resume', content);
+    const result = createResumeStmt.run(req.user.id, title, content);
     const resumeId = result.lastInsertRowid;
-    createVersionStmt.run(resumeId, 1, content, title.trim() || 'Untitled Resume');
+    createVersionStmt.run(resumeId, 1, content, title);
     return getResumeStmt.get(resumeId);
   });
 
@@ -124,15 +142,21 @@ app.post('/api/resumes', (req, res) => {
 });
 
 app.put('/api/resumes/:id', (req, res) => {
-  const resumeId = Number(req.params.id);
+  const resumeId = parseInteger(req.params.id);
+  if (!resumeId || resumeId < 1) {
+    return res.status(400).json({ error: 'Invalid resume ID' });
+  }
   const { title, content, createVersion = true } = req.body || {};
   const ownedResume = assertResumeOwnership(resumeId, req.user.id);
   if (!ownedResume) {
     return res.status(404).json({ error: 'Resume not found' });
   }
 
-  const nextTitle = (title ?? ownedResume.title).trim() || 'Untitled Resume';
-  const nextContent = content ?? ownedResume.current_content;
+  const { title: nextTitle, content: nextContent } = normalizeResumeInput(
+    { title, content },
+    ownedResume.title,
+    ownedResume.current_content
+  );
 
   const tx = db.transaction(() => {
     updateResumeStmt.run(nextTitle, nextContent, resumeId);
@@ -148,7 +172,10 @@ app.put('/api/resumes/:id', (req, res) => {
 });
 
 app.delete('/api/resumes/:id', (req, res) => {
-  const resumeId = Number(req.params.id);
+  const resumeId = parseInteger(req.params.id);
+  if (!resumeId || resumeId < 1) {
+    return res.status(400).json({ error: 'Invalid resume ID' });
+  }
   const ownedResume = assertResumeOwnership(resumeId, req.user.id);
   if (!ownedResume) {
     return res.status(404).json({ error: 'Resume not found' });
@@ -159,7 +186,10 @@ app.delete('/api/resumes/:id', (req, res) => {
 });
 
 app.get('/api/resumes/:id', (req, res) => {
-  const resumeId = Number(req.params.id);
+  const resumeId = parseInteger(req.params.id);
+  if (!resumeId || resumeId < 1) {
+    return res.status(400).json({ error: 'Invalid resume ID' });
+  }
   const ownedResume = assertResumeOwnership(resumeId, req.user.id);
   if (!ownedResume) {
     return res.status(404).json({ error: 'Resume not found' });
@@ -168,7 +198,10 @@ app.get('/api/resumes/:id', (req, res) => {
 });
 
 app.post('/api/resumes/:id/versions', (req, res) => {
-  const resumeId = Number(req.params.id);
+  const resumeId = parseInteger(req.params.id);
+  if (!resumeId || resumeId < 1) {
+    return res.status(400).json({ error: 'Invalid resume ID' });
+  }
   const ownedResume = assertResumeOwnership(resumeId, req.user.id);
   if (!ownedResume) {
     return res.status(404).json({ error: 'Resume not found' });
@@ -176,16 +209,27 @@ app.post('/api/resumes/:id/versions', (req, res) => {
 
   const { sourceVersionId, title, content } = req.body || {};
 
-  let baseContent = content ?? ownedResume.current_content;
-  let snapshotTitle = (title ?? ownedResume.title).trim() || 'Untitled Resume';
+  let { title: snapshotTitle, content: baseContent } = normalizeResumeInput(
+    { title, content },
+    ownedResume.title,
+    ownedResume.current_content
+  );
 
   if (sourceVersionId) {
-    const sourceVersion = getVersionStmt.get(Number(sourceVersionId), resumeId);
+    const parsedSourceVersionId = parseInteger(sourceVersionId);
+    if (!parsedSourceVersionId || parsedSourceVersionId < 1) {
+      return res.status(400).json({ error: 'Invalid source version ID' });
+    }
+
+    const sourceVersion = getVersionStmt.get(parsedSourceVersionId, resumeId);
     if (!sourceVersion) {
       return res.status(404).json({ error: 'Source version not found' });
     }
-    baseContent = content ?? sourceVersion.content;
-    snapshotTitle = (title ?? sourceVersion.snapshot_title).trim() || 'Untitled Resume';
+    ({ title: snapshotTitle, content: baseContent } = normalizeResumeInput(
+      { title, content },
+      sourceVersion.snapshot_title,
+      sourceVersion.content
+    ));
   }
 
   const tx = db.transaction(() => {
@@ -201,7 +245,10 @@ app.post('/api/resumes/:id/versions', (req, res) => {
 });
 
 app.get('/api/resumes/:id/versions', (req, res) => {
-  const resumeId = Number(req.params.id);
+  const resumeId = parseInteger(req.params.id);
+  if (!resumeId || resumeId < 1) {
+    return res.status(400).json({ error: 'Invalid resume ID' });
+  }
   const ownedResume = assertResumeOwnership(resumeId, req.user.id);
   if (!ownedResume) {
     return res.status(404).json({ error: 'Resume not found' });
@@ -212,8 +259,14 @@ app.get('/api/resumes/:id/versions', (req, res) => {
 });
 
 app.get('/api/resumes/:id/versions/:versionId', (req, res) => {
-  const resumeId = Number(req.params.id);
-  const versionId = Number(req.params.versionId);
+  const resumeId = parseInteger(req.params.id);
+  const versionId = parseInteger(req.params.versionId);
+  if (!resumeId || resumeId < 1) {
+    return res.status(400).json({ error: 'Invalid resume ID' });
+  }
+  if (!versionId || versionId < 1) {
+    return res.status(400).json({ error: 'Invalid version ID' });
+  }
   const ownedResume = assertResumeOwnership(resumeId, req.user.id);
   if (!ownedResume) {
     return res.status(404).json({ error: 'Resume not found' });

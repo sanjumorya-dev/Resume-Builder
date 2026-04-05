@@ -8,7 +8,7 @@ export function ProgressIndicator({ steps, currentStep }: ProgressIndicatorProps
     <div className="rounded-xl border border-slate-200 bg-white/80 p-4 shadow-sm backdrop-blur">
       <div className="mb-4 flex items-center justify-between text-sm text-slate-600">
         <span className="font-semibold">Step {currentStep + 1}</span>
-        <span>Step {steps.length}</span>
+        <span>of {steps.length}</span>
       </div>
       <div className="mb-4 h-2 w-full overflow-hidden rounded-full bg-slate-200">
         <div
